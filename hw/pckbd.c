@@ -120,6 +120,7 @@ typedef struct KBDState {
     uint8_t mode;
     /* Bitmask of devices with data available.  */
     uint8_t pending;
+    uint32_t held_kbd_val;
     void *kbd;
     void *mouse;
 
@@ -161,9 +162,10 @@ static void kbd_update_kbd_irq(void *opaque, int level)
 {
     KBDState *s = (KBDState *)opaque;
 
-    if (level)
+    if (level) {
         s->pending |= KBD_PENDING_KBD;
-    else
+        s->held_kbd_val = (uint32_t) -1;
+    } else
         s->pending &= ~KBD_PENDING_KBD;
     kbd_update_irq(s);
 }
@@ -238,6 +240,7 @@ static void kbd_write_command(void *opaque, uint32_t addr, uint32_t val)
         break;
     case KBD_CCMD_KBD_ENABLE:
         s->mode &= ~KBD_MODE_DISABLE_KBD;
+        s->held_kbd_val = (uint32_t) -1;
         kbd_update_irq(s);
         break;
     case KBD_CCMD_READ_INPORT:
@@ -283,8 +286,15 @@ static uint32_t kbd_read_data(void *opaque, uint32_t addr)
 
     if (s->pending == KBD_PENDING_AUX)
         val = ps2_read_data(s->mouse);
-    else
-        val = ps2_read_data(s->kbd);
+    else {
+        if (s->mode & KBD_MODE_DISABLE_KBD && s->held_kbd_val != (uint32_t) -1)
+            val = s->held_kbd_val;
+        else {
+            val = ps2_read_data(s->kbd);
+            if (!(s->mode & KBD_MODE_DISABLE_KBD))
+                s->held_kbd_val = val;
+        }
+    }
 
 #if defined(DEBUG_KBD)
     printf("kbd: read data=0x%02x\n", val);
@@ -339,6 +349,7 @@ static void kbd_reset(void *opaque)
 
     s->mode = KBD_MODE_KBD_INT | KBD_MODE_MOUSE_INT;
     s->status = KBD_STAT_CMD | KBD_STAT_UNLOCKED;
+    s->held_kbd_val = (uint32_t) -1;
 }
 
 static void kbd_save(QEMUFile* f, void* opaque)
